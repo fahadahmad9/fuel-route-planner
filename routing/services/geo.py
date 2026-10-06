@@ -40,8 +40,17 @@ def _read_places(path, cities, allow_existing):
         delimiter = _parse_delimiter(first_line)
         fieldnames = [
             field.strip()
-            for field in first_line.rstrip("\r\n").split(delimiter)
+            for field in next(
+                csv.reader([first_line], delimiter=delimiter)
+            )
         ]
+        required_columns = {"city_ascii", "state_id", "lat", "lng"}
+        missing_columns = required_columns.difference(fieldnames)
+        if missing_columns:
+            raise RuntimeError(
+                f"Required columns missing from {path}: "
+                f"{sorted(missing_columns)}; found {fieldnames}"
+            )
         reader = csv.DictReader(file, fieldnames=fieldnames, delimiter=delimiter)
         for row in reader:
             try:
