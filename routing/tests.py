@@ -3,11 +3,13 @@ from django.test import SimpleTestCase, override_settings
 
 import numpy as np
 import requests
+import random
 from unittest.mock import patch
 
 from routing.models import Station
 from routing.services.geo import GeoError, resolve_location
 from routing.services.geo import _load_city_table
+from routing.services.optimizer import OptimizerError, optimize_fuel_stops
 from routing.services.ors import RoutingError, get_route
 from routing.services.route import (
     cumulative_miles,
@@ -16,6 +18,46 @@ from routing.services.route import (
     sample_route,
 )
 from routing.services.stations import get_index, reset_index
+
+
+def dynamic_programming_fuel_cost(total_miles, stations):
+    """Return the exact minimum cost with fuel discretized to tenths."""
+    tank_units = 500
+    mpg = 10.0
+    ordered = sorted(stations, key=lambda station: station["mile_marker"])
+    positions = [0.0] + [
+        float(station["mile_marker"]) for station in ordered
+    ] + [float(total_miles)]
+    prices = [None] + [float(station["price"]) for station in ordered] + [0.0]
+    infinity = float("inf")
+    costs = [infinity] * (tank_units + 1)
+    costs[500] = 0.0
+
+    for index in range(len(positions) - 1):
+        distance_units = round(
+            (positions[index + 1] - positions[index]) / mpg * 10
+        )
+        next_costs = [infinity] * (tank_units + 1)
+        for fuel_units, cost in enumerate(costs):
+            if cost == infinity:
+                continue
+            max_purchase = 0 if index == 0 else tank_units - fuel_units
+            for purchase_units in range(max_purchase + 1):
+                remaining = fuel_units + purchase_units - distance_units
+                if remaining < 0:
+                    continue
+                purchase_cost = (
+                    0.0
+                    if index == 0
+                    else purchase_units / 10 * prices[index]
+                )
+                next_costs[remaining] = min(
+                    next_costs[remaining],
+                    cost + purchase_cost,
+                )
+        costs = next_costs
+
+    return min(costs)
 
 
 class ResolveLocationTests(TestCase):
@@ -296,3 +338,129 @@ class CityTableRegressionTests(SimpleTestCase):
 
     def test_city_table_contains_us_cities(self):
         self.assertGreater(len(_load_city_table()), 20000)
+
+
+class FuelOptimizerTests(SimpleTestCase):
+    def station(self, opis_id, mile_marker, price, city="Test"):
+        return {
+            "opis_id": opis_id,
+            "name": f"{city} Station",
+            "address": "Test address",
+            "city": city,
+            "state": "TX",
+            "lat": 32.0,
+            "lng": -96.0,
+            "price": price,
+            "mile_marker": mile_marker,
+            "off_route_miles": 0.0,
+        }
+
+    def test_short_trip_has_no_stops(self):
+        result = optimize_fuel_stops(300, [])
+        self.assertEqual(result["stops"], [])
+        self.assertEqual(result["total_cost"], 0.0)
+
+    def test_thousand_mile_trip_is_feasible_at_hand_computed_cost(self):
+        stations = [
+            self.station(1, 400, 4.00),
+            self.station(2, 450, 3.00),
+            self.station(3, 800, 3.50),
+        ]
+        result = optimize_fuel_stops(1000, stations)
+        # Free initial fuel reaches mile 450; buy 45 gallons at $3,
+        # then 5 gallons at $3.50 for miles 800-1000: $152.50 total.
+        self.assertEqual(result["total_cost"], 152.5)
+        self.assertEqual([stop["opis_id"] for stop in result["stops"]], [2, 3])
+        self.assertTrue(all(stop["gallons_purchased"] >= 0 for stop in result["stops"]))
+        self.assertEqual(result["stops"][-1]["mile_marker"], 800)
+
+    def test_cheaper_station_gets_only_required_fuel(self):
+        result = optimize_fuel_stops(900, [
+            self.station(1, 400, 4.00),
+            self.station(2, 700, 3.00),
+        ])
+        first_stop = result["stops"][0]
+        self.assertEqual(first_stop["opis_id"], 1)
+        self.assertAlmostEqual(first_stop["gallons_purchased"], 20.0)
+        self.assertLess(first_stop["gallons_purchased"], 50.0)
+
+    def test_large_gap_is_infeasible(self):
+        with self.assertRaises(OptimizerError):
+            optimize_fuel_stops(1000, [self.station(1, 501, 3.00)])
+
+    def test_same_mile_marker_keeps_cheapest_station(self):
+        result = optimize_fuel_stops(900, [
+            self.station(1, 400, 4.00, "Expensive"),
+            self.station(2, 400, 3.00, "Cheap"),
+            self.station(3, 800, 3.50),
+        ])
+        self.assertEqual(result["stops"][0]["opis_id"], 2)
+
+    def test_purchase_and_cost_totals_match_stops(self):
+        result = optimize_fuel_stops(1000, [
+            self.station(1, 400, 4.00),
+            self.station(2, 450, 3.00),
+            self.station(3, 800, 3.50),
+        ])
+        self.assertAlmostEqual(
+            result["gallons_purchased"],
+            sum(stop["gallons_purchased"] for stop in result["stops"]),
+        )
+        self.assertAlmostEqual(
+            result["total_cost"],
+            sum(stop["cost"] for stop in result["stops"]),
+        )
+
+    def test_replay_never_runs_out_of_fuel(self):
+        result = optimize_fuel_stops(1000, [
+            self.station(1, 400, 4.00),
+            self.station(2, 450, 3.00),
+            self.station(3, 800, 3.50),
+        ])
+        fuel = 50.0
+        previous_mile = 0.0
+        for stop in result["stops"]:
+            fuel -= (stop["mile_marker"] - previous_mile) / 10.0
+            self.assertGreaterEqual(fuel, -1e-6)
+            fuel += stop["gallons_purchased"]
+            previous_mile = stop["mile_marker"]
+        fuel -= (1000 - previous_mile) / 10.0
+        self.assertGreaterEqual(fuel, -1e-6)
+        remainder = result["gallons_purchased"] + 50 - 1000 / 10
+        self.assertGreaterEqual(remainder, 0)
+        if abs(fuel) < 1e-6:
+            self.assertLess(remainder, 1e-6)
+
+    def test_greedy_cost_is_close_to_dynamic_programming_optimum(self):
+        for seed in (42, 43, 44):
+            rng = random.Random(seed)
+            stations = []
+            for index in range(25):
+                mile_marker = round(
+                    (index + 1) * 75 + rng.randint(-15, 15),
+                    1,
+                )
+                stations.append({
+                    "opis_id": seed * 1000 + index,
+                    "name": f"Station {index}",
+                    "address": "Test address",
+                    "city": "Test",
+                    "state": "TX",
+                    "lat": 32.0,
+                    "lng": -96.0,
+                    "price": round(rng.uniform(2.8, 3.8), 2),
+                    "mile_marker": mile_marker,
+                    "off_route_miles": 0.0,
+                })
+
+            greedy = optimize_fuel_stops(2000, stations)
+            optimum = dynamic_programming_fuel_cost(2000, stations)
+            print(
+                f"seed {seed}: greedy ${greedy['total_cost']:.2f}, "
+                f"DP ${optimum:.2f}"
+            )
+            self.assertAlmostEqual(
+                greedy["total_cost"],
+                optimum,
+                delta=1.00,
+            )
