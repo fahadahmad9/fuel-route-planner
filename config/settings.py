@@ -124,6 +124,7 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 ORS_API_KEY = os.getenv("ORS_API_KEY", "")
+SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 
 
 # Email
