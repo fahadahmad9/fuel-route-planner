@@ -125,6 +125,14 @@ STATIC_URL = 'static/'
 
 ORS_API_KEY = os.getenv("ORS_API_KEY", "")
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+ROUTE_CACHE_TTL = 60 * 60 * 24
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "fuel-route-cache",
+    },
+}
 
 
 # Email

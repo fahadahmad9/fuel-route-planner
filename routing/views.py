@@ -1,5 +1,9 @@
+import hashlib
+import time
 from urllib.parse import urlencode
 
+from django.conf import settings
+from django.core.cache import cache
 from django.shortcuts import render
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -23,20 +27,30 @@ class RouteView(APIView):
         return self._handle(request.data)
 
     def _handle(self, data):
+        started = time.perf_counter()
         serializer = RouteRequestSerializer(data=data)
         if not serializer.is_valid():
-            return Response({"error": serializer.errors}, status=400)
+            return self._response(
+                {"error": serializer.errors}, 400, "MISS", started
+            )
+
+        start_text = self._normalize_input(serializer.validated_data["start"])
+        finish_text = self._normalize_input(serializer.validated_data["finish"])
+        cache_key = self._cache_key(start_text, finish_text)
+        cached_payload = cache.get(cache_key)
+        if cached_payload is not None:
+            return self._response(cached_payload, 200, "HIT", started)
 
         try:
             start = resolve_location(serializer.validated_data["start"])
             finish = resolve_location(serializer.validated_data["finish"])
         except GeoError as error:
-            return Response({"error": str(error)}, status=400)
+            return self._response({"error": str(error)}, 400, "MISS", started)
 
         try:
             route = get_route(start, finish)
         except RoutingError as error:
-            return Response({"error": str(error)}, status=502)
+            return self._response({"error": str(error)}, 502, "MISS", started)
 
         try:
             matched = find_stations_along_route(route["coords"])
@@ -45,7 +59,7 @@ class RouteView(APIView):
                 matched["stations"],
             )
         except OptimizerError as error:
-            return Response({"error": str(error)}, status=422)
+            return self._response({"error": str(error)}, 422, "MISS", started)
 
         coords = route["coords"]
         if len(coords) > 1500:
@@ -72,7 +86,7 @@ class RouteView(APIView):
             }
             for station in optimized["stops"]
         ]
-        return Response({
+        payload = {
             "start": {
                 "label": start["label"],
                 "lat": float(start["lat"]),
@@ -102,7 +116,27 @@ class RouteView(APIView):
                 serializer.validated_data["start"],
                 serializer.validated_data["finish"],
             ),
-        })
+        }
+        cache.set(cache_key, payload, settings.ROUTE_CACHE_TTL)
+        return self._response(payload, 200, "MISS", started)
+
+    @staticmethod
+    def _normalize_input(value):
+        return " ".join(value.lower().strip().split())
+
+    @staticmethod
+    def _cache_key(start, finish):
+        value = f"{start}\n{finish}".encode("utf-8")
+        digest = hashlib.sha256(value).hexdigest()
+        return f"route:v1:{digest}"
+
+    @staticmethod
+    def _response(payload, status, cache_status, started):
+        response = Response(payload, status=status)
+        response["X-Cache"] = cache_status
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        response["X-Response-Time-ms"] = f"{elapsed_ms:.2f}"
+        return response
 
     def _map_url(self, start, finish):
         path = "/api/route/map/?" + urlencode({

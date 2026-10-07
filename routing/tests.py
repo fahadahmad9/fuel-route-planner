@@ -1,5 +1,6 @@
 from django.test import TestCase
 from django.test import SimpleTestCase, override_settings
+from django.core.cache import cache
 from rest_framework.test import APITestCase
 
 import numpy as np
@@ -468,6 +469,20 @@ class FuelOptimizerTests(SimpleTestCase):
 
 
 class RouteAPITests(APITestCase):
+    def setUp(self):
+        cache.clear()
+
+    def fake_route(self, distance=600.0):
+        return {
+            "coords": [
+                (32.78, -96.8),
+                (35.47, -97.5),
+            ],
+            "distance_miles": distance,
+            "duration_hours": 10.0,
+            "geometry": {"type": "LineString", "coordinates": []},
+        }
+
     def test_route_map_renders_template(self):
         response = self.client.get("/api/route/map/")
         self.assertEqual(response.status_code, 200)
@@ -571,6 +586,91 @@ class RouteAPITests(APITestCase):
             body["total_fuel_cost"],
             round(sum(stop["cost"] for stop in body["fuel_stops"]), 2),
         )
+        get_route_mock.assert_called_once()
+
+    @patch("routing.views.optimize_fuel_stops")
+    @patch("routing.views.find_stations_along_route")
+    @patch("routing.views.get_route")
+    def test_identical_requests_use_cached_payload(
+        self,
+        get_route_mock,
+        find_stations_mock,
+        optimize_mock,
+    ):
+        get_route_mock.return_value = self.fake_route()
+        find_stations_mock.return_value = self.fake_stations()
+        optimize_mock.return_value = self.fake_optimized()
+        first = self.client.get(
+            "/api/route/",
+            {"start": "Dallas, TX", "finish": "Oklahoma City, OK"},
+        )
+        second = self.client.get(
+            "/api/route/",
+            {"start": "Dallas, TX", "finish": "Oklahoma City, OK"},
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first["X-Cache"], "MISS")
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second["X-Cache"], "HIT")
+        self.assertEqual(get_route_mock.call_count, 1)
+        self.assertEqual(find_stations_mock.call_count, 1)
+        self.assertEqual(optimize_mock.call_count, 1)
+
+    @patch("routing.views.optimize_fuel_stops")
+    @patch("routing.views.find_stations_along_route")
+    @patch("routing.views.get_route")
+    def test_normalized_inputs_share_cache_key(
+        self,
+        get_route_mock,
+        find_stations_mock,
+        optimize_mock,
+    ):
+        get_route_mock.return_value = self.fake_route()
+        find_stations_mock.return_value = self.fake_stations()
+        optimize_mock.return_value = self.fake_optimized()
+        first = self.client.get(
+            "/api/route/",
+            {"start": "Los Angeles, CA", "finish": "Dallas, TX"},
+        )
+        second = self.client.get(
+            "/api/route/",
+            {"start": "  los angeles,  ca ", "finish": "dallas, tx"},
+        )
+        self.assertEqual(first["X-Cache"], "MISS")
+        self.assertEqual(second["X-Cache"], "HIT")
+        self.assertEqual(get_route_mock.call_count, 1)
+
+    def test_error_responses_are_not_cached(self):
+        first = self.client.get(
+            "/api/route/",
+            {"start": "Toronto, ON", "finish": "Dallas, TX"},
+        )
+        second = self.client.get(
+            "/api/route/",
+            {"start": "Toronto, ON", "finish": "Dallas, TX"},
+        )
+        self.assertEqual(first.status_code, 400)
+        self.assertEqual(second.status_code, 400)
+        self.assertNotEqual(first["X-Cache"], "HIT")
+        self.assertNotEqual(second["X-Cache"], "HIT")
+
+    @patch("routing.views.find_stations_along_route")
+    @patch("routing.views.get_route")
+    def test_short_route_has_zero_fuel_stops_and_cost(
+        self,
+        get_route_mock,
+        find_stations_mock,
+    ):
+        get_route_mock.return_value = self.fake_route(distance=300.0)
+        find_stations_mock.return_value = {"total_miles": 300.0, "stations": []}
+        response = self.client.get(
+            "/api/route/",
+            {"start": "Dallas, TX", "finish": "Oklahoma City, OK"},
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["fuel_stops"], [])
+        self.assertEqual(body["total_fuel_cost"], 0.0)
         get_route_mock.assert_called_once()
 
     def test_missing_finish_returns_bad_request(self):
