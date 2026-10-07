@@ -76,6 +76,29 @@ class ResolveLocationTests(TestCase):
         self.assertEqual(lowercase["lat"], titlecase["lat"])
         self.assertEqual(lowercase["lng"], titlecase["lng"])
 
+    def test_full_state_name_matches_state_code(self):
+        full_name = resolve_location("Kansas City, Missouri")
+        code = resolve_location("Kansas City, MO")
+        self.assertEqual(
+            (full_name["lat"], full_name["lng"]),
+            (code["lat"], code["lng"]),
+        )
+
+    def test_lowercase_full_state_name_resolves(self):
+        location = resolve_location("dallas, texas")
+        self.assertGreater(location["lat"], 32.70)
+        self.assertLess(location["lat"], 32.90)
+
+    def test_district_of_columbia_resolves(self):
+        location = resolve_location("Washington, District of Columbia")
+        self.assertEqual(location["label"], "Washington, DC")
+        self.assertGreater(location["lat"], 38.8)
+        self.assertLess(location["lat"], 39.0)
+
+    def test_unknown_full_state_name_raises(self):
+        with self.assertRaises(GeoError):
+            resolve_location("Springfield, Narnia")
+
     def test_coordinates_resolve(self):
         location = resolve_location("32.78,-96.8")
         self.assertEqual(location, {

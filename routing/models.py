@@ -1,6 +1,5 @@
 from django.db import models
 
-
 class Station(models.Model):
     opis_id = models.IntegerField(unique=True)
     name = models.CharField(max_length=200)

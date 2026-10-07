@@ -1,7 +1,7 @@
+# This module provides functions for calculating distances along a route and finding nearby stations.
+
 import numpy as np
-
 from routing.services.stations import EARTH_RADIUS_MILES, get_index
-
 
 def haversine_miles(lat1, lng1, lat2, lng2):
     lat1 = np.radians(np.asarray(lat1, dtype=float))
@@ -16,7 +16,6 @@ def haversine_miles(lat1, lng1, lat2, lng2):
     )
     return 2 * EARTH_RADIUS_MILES * np.arcsin(np.sqrt(a))
 
-
 def cumulative_miles(coords):
     points = np.asarray(coords, dtype=float)
     segments = haversine_miles(
@@ -26,7 +25,6 @@ def cumulative_miles(coords):
         points[1:, 1],
     )
     return np.concatenate(([0.0], np.cumsum(segments)))
-
 
 def sample_route(coords, cum, step_miles=3.0):
     points = np.asarray(coords, dtype=float)
@@ -45,7 +43,6 @@ def sample_route(coords, cum, step_miles=3.0):
         np.interp(miles, cumulative, points[:, 1]),
     ))
     return sampled, miles
-
 
 def find_stations_along_route(
     coords,

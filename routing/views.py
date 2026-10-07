@@ -14,10 +14,11 @@ from routing.services.optimizer import OptimizerError, optimize_fuel_stops
 from routing.services.ors import RoutingError, get_route
 from routing.services.route import find_stations_along_route
 
+# This module defines the views for the routing application, 
+# including the route map view and the API view for handling route requests.
 
 def route_map(request):
     return render(request, "routing/map.html")
-
 
 class RouteView(APIView):
     def get(self, request, *args, **kwargs):
@@ -144,5 +145,3 @@ class RouteView(APIView):
             "finish": finish,
         })
         return self.request.build_absolute_uri(path)
-
-# Create your views here.

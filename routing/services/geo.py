@@ -1,9 +1,8 @@
+# Turns a city/state or lat/lng string into a dict with lat/lng and label.
 import csv
 import re
 from functools import lru_cache
-
 from django.conf import settings
-
 
 US_STATES = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
@@ -14,25 +13,91 @@ US_STATES = {
     "DC",
 }
 
+STATE_NAMES = {
+    "alabama": "AL",
+    "alaska": "AK",
+    "arizona": "AZ",
+    "arkansas": "AR",
+    "california": "CA",
+    "colorado": "CO",
+    "connecticut": "CT",
+    "delaware": "DE",
+    "florida": "FL",
+    "georgia": "GA",
+    "hawaii": "HI",
+    "idaho": "ID",
+    "illinois": "IL",
+    "indiana": "IN",
+    "iowa": "IA",
+    "kansas": "KS",
+    "kentucky": "KY",
+    "louisiana": "LA",
+    "maine": "ME",
+    "maryland": "MD",
+    "massachusetts": "MA",
+    "michigan": "MI",
+    "minnesota": "MN",
+    "mississippi": "MS",
+    "missouri": "MO",
+    "montana": "MT",
+    "nebraska": "NE",
+    "nevada": "NV",
+    "new hampshire": "NH",
+    "new jersey": "NJ",
+    "new mexico": "NM",
+    "new york": "NY",
+    "north carolina": "NC",
+    "north dakota": "ND",
+    "ohio": "OH",
+    "oklahoma": "OK",
+    "oregon": "OR",
+    "pennsylvania": "PA",
+    "rhode island": "RI",
+    "south carolina": "SC",
+    "south dakota": "SD",
+    "tennessee": "TN",
+    "texas": "TX",
+    "utah": "UT",
+    "vermont": "VT",
+    "virginia": "VA",
+    "washington": "WA",
+    "west virginia": "WV",
+    "wisconsin": "WI",
+    "wyoming": "WY",
+    "district of columbia": "DC",
+    "washington dc": "DC",
+}
+
 MIN_LATITUDE = 24.0
 MAX_LATITUDE = 50.0
 MIN_LONGITUDE = -125.0
 MAX_LONGITUDE = -66.0
 
-
 class GeoError(ValueError):
     pass
-
 
 def normalize(city):
     city = city.strip().lower().replace(".", "")
     city = " ".join(city.split())
     return re.sub(r"\bst\b", "saint", city)
 
+def normalize_state(text):
+    original = text.strip()
+    compact = " ".join(original.replace(".", "").split())
+    if len(compact) == 2:
+        state = compact.upper()
+        if state in US_STATES:
+            return state
+    state = STATE_NAMES.get(compact.lower())
+    if state is not None:
+        return state
+    raise GeoError(
+        f"Unknown US state: '{text}'. Use a two-letter code (e.g. MO) "
+        "or full state name."
+    )
 
 def _parse_delimiter(line):
     return "\t" if line.count("\t") > line.count(",") else ","
-
 
 def _read_places(path, cities, allow_existing):
     with path.open("r", encoding="utf-8-sig", newline="") as file:
@@ -82,13 +147,11 @@ def _load_city_table():
 
     return {key: (value[0], value[1]) for key, value in cities.items()}
 
-
 def _in_bounds(lat, lng):
     return (
         MIN_LATITUDE <= lat <= MAX_LATITUDE
         and MIN_LONGITUDE <= lng <= MAX_LONGITUDE
     )
-
 
 def resolve_location(text: str) -> dict:
     if not isinstance(text, str) or not text.strip():
@@ -104,9 +167,7 @@ def resolve_location(text: str) -> dict:
         lng = float(second.strip())
     except ValueError:
         city = first.strip()
-        state = second.strip().upper()
-        if state not in US_STATES:
-            raise GeoError(f"Unknown US state code: {state or '<empty>'}.")
+        state = normalize_state(second)
         coordinates = _load_city_table().get((normalize(city), state))
         if coordinates is None:
             raise GeoError(f"City not found: {city}, {state}.")

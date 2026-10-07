@@ -3,6 +3,10 @@
 import os
 import sys
 
+# This is a Django management script that sets up the environment and executes administrative tasks. 
+# It imports necessary modules, sets the default settings module for Django, 
+# and defines a main function that handles command-line arguments.
+# If the script is run directly, it calls the main function to execute the specified management command.
 
 def main():
     """Run administrative tasks."""

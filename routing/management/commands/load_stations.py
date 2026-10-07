@@ -1,10 +1,9 @@
 import csv
 from pathlib import Path
-
 from django.core.management.base import BaseCommand
-
 from routing.models import Station
 
+# This Django management command loads fuel station data from CSV files into the database.
 
 class Command(BaseCommand):
     help = "Load fuel stations from CSV data."

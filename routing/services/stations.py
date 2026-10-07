@@ -1,12 +1,13 @@
+# This module provides a spatial index for stations, 
+# allowing efficient querying of nearby stations based on latitude and longitude. 
+# It uses a KD-tree for fast nearest neighbor searches and supports querying within a specified radius.
+
 import numpy as np
 from scipy.spatial import cKDTree
-
 from routing.models import Station
-
 
 EARTH_RADIUS_MILES = 3958.8
 REFERENCE_LATITUDE = 38.0
-
 
 class StationIndex:
     def __init__(self):
@@ -80,16 +81,13 @@ class StationIndex:
             "lng": float(self.lngs[i]),
         }
 
-
 _index = None
-
 
 def get_index():
     global _index
     if _index is None:
         _index = StationIndex()
     return _index
-
 
 def reset_index():
     global _index

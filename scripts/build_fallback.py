@@ -1,6 +1,8 @@
 import csv
 from pathlib import Path
 
+# This script reads a tab-separated text file containing US city data and 
+# converts it into a CSV format suitable for fallback location resolution.
 
 def main():
     base_dir = Path(__file__).resolve().parents[1]

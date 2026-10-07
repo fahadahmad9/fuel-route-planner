@@ -1,5 +1,5 @@
+# Serializer for route request data, validating the start and finish locations.
 from rest_framework import serializers
-
 
 class RouteRequestSerializer(serializers.Serializer):
     start = serializers.CharField(

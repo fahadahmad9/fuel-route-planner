@@ -1,11 +1,12 @@
+# This module provides a function to optimize fuel stops along a route based on total miles, 
+# available stations, vehicle range, and fuel efficiency.
+
 MAX_RANGE_MILES = 500.0
 MPG = 10.0
 TANK_GALLONS = MAX_RANGE_MILES / MPG
 
-
 class OptimizerError(Exception):
     pass
-
 
 def optimize_fuel_stops(
     total_miles: float,
