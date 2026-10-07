@@ -60,7 +60,8 @@ def optimize_fuel_stops(
         current_mile = float(current["mile_marker"])
         distance = current_mile - position
         fuel -= distance / mpg
-        assert fuel >= -1e-9
+        if fuel < -1e-9:
+            raise OptimizerError("Internal error: fuel went negative between stops.")
         fuel = max(0.0, fuel)
         position = current_mile
 
@@ -101,11 +102,13 @@ def optimize_fuel_stops(
         purchased += buy
         cost += stop["cost"]
         fuel += buy
-        assert fuel <= TANK_GALLONS + 1e-9
+        if fuel > TANK_GALLONS + 1e-9:
+            raise OptimizerError("Internal error: fuel exceeded the tank capacity.")
 
         if next_station is None:
             fuel -= destination_distance / mpg
-            assert fuel >= -1e-9
+            if fuel < -1e-9:
+                raise OptimizerError("Internal error: fuel went negative at the destination.")
             break
         current = next_station
 

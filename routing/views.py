@@ -22,12 +22,18 @@ def route_map(request):
 
 class RouteView(APIView):
     def get(self, request, *args, **kwargs):
-        return self._handle(request.query_params)
+        return self._handle(
+            request.query_params,
+            self._include_geometry(request.query_params),
+        )
 
     def post(self, request, *args, **kwargs):
-        return self._handle(request.data)
+        return self._handle(
+            request.data,
+            self._include_geometry(request.query_params),
+        )
 
-    def _handle(self, data):
+    def _handle(self, data, include_geometry=True):
         started = time.perf_counter()
         serializer = RouteRequestSerializer(data=data)
         if not serializer.is_valid():
@@ -40,7 +46,11 @@ class RouteView(APIView):
         cache_key = self._cache_key(start_text, finish_text)
         cached_payload = cache.get(cache_key)
         if cached_payload is not None:
-            return self._response(cached_payload, 200, "HIT", started)
+            response_payload = dict(cached_payload)
+            response_payload["cached"] = True
+            if not include_geometry:
+                response_payload.pop("route_geojson", None)
+            return self._response(response_payload, 200, "HIT", started)
 
         try:
             start = resolve_location(serializer.validated_data["start"])
@@ -99,6 +109,7 @@ class RouteView(APIView):
                 "lng": float(finish["lng"]),
             },
             "distance_miles": round(float(route["distance_miles"]), 1),
+            "duration_hours": round(float(route["duration_hours"]), 2),
             "total_gallons": round(float(optimized["total_gallons"]), 2),
             "total_fuel_cost": round(float(optimized["total_cost"]), 2),
             "assumptions": {
@@ -117,9 +128,13 @@ class RouteView(APIView):
                 serializer.validated_data["start"],
                 serializer.validated_data["finish"],
             ),
+            "cached": False,
         }
         cache.set(cache_key, payload, settings.ROUTE_CACHE_TTL)
-        return self._response(payload, 200, "MISS", started)
+        response_payload = dict(payload)
+        if not include_geometry:
+            response_payload.pop("route_geojson", None)
+        return self._response(response_payload, 200, "MISS", started)
 
     @staticmethod
     def _normalize_input(value):
@@ -130,6 +145,11 @@ class RouteView(APIView):
         value = f"{start}\n{finish}".encode("utf-8")
         digest = hashlib.sha256(value).hexdigest()
         return f"route:v1:{digest}"
+
+    @staticmethod
+    def _include_geometry(query_params):
+        value = query_params.get("include_geometry")
+        return value is None or value.lower() not in {"false", "0"}
 
     @staticmethod
     def _response(payload, status, cache_status, started):

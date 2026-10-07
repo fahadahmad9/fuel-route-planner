@@ -13,6 +13,8 @@ US_STATES = {
     "DC",
 }
 
+NON_CONTIGUOUS = {"AK", "HI"}
+
 STATE_NAMES = {
     "alabama": "AL",
     "alaska": "AK",
@@ -168,6 +170,11 @@ def resolve_location(text: str) -> dict:
     except ValueError:
         city = first.strip()
         state = normalize_state(second)
+        if state in NON_CONTIGUOUS:
+            raise GeoError(
+                "Alaska and Hawaii are not supported; only the contiguous USA "
+                "can be routed."
+            )
         coordinates = _load_city_table().get((normalize(city), state))
         if coordinates is None:
             raise GeoError(f"City not found: {city}, {state}.")

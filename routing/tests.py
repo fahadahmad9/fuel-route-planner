@@ -119,6 +119,20 @@ class ResolveLocationTests(TestCase):
         with self.assertRaises(GeoError):
             resolve_location("Nowhereville, TX")
 
+    def test_alaska_is_not_supported(self):
+        with self.assertRaisesRegex(
+            GeoError,
+            "Alaska and Hawaii are not supported; only the contiguous USA can be routed.",
+        ):
+            resolve_location("Anchorage, AK")
+
+    def test_hawaii_is_not_supported(self):
+        with self.assertRaisesRegex(
+            GeoError,
+            "Alaska and Hawaii are not supported; only the contiguous USA can be routed.",
+        ):
+            resolve_location("Honolulu, HI")
+
 
 class StationIndexTests(TestCase):
     @classmethod
@@ -695,6 +709,64 @@ class RouteAPITests(APITestCase):
         self.assertEqual(body["fuel_stops"], [])
         self.assertEqual(body["total_fuel_cost"], 0.0)
         get_route_mock.assert_called_once()
+
+    @patch("routing.views.optimize_fuel_stops")
+    @patch("routing.views.find_stations_along_route")
+    @patch("routing.views.get_route")
+    def test_route_response_includes_duration_and_geometry_option(
+        self,
+        get_route_mock,
+        find_stations_mock,
+        optimize_mock,
+    ):
+        get_route_mock.return_value = self.fake_route()
+        find_stations_mock.return_value = self.fake_stations()
+        optimize_mock.return_value = self.fake_optimized()
+
+        default_response = self.client.get(
+            "/api/route/",
+            {"start": "Dallas, TX", "finish": "Oklahoma City, OK"},
+        )
+        without_geometry = self.client.get(
+            "/api/route/",
+            {
+                "start": "Dallas, TX",
+                "finish": "Oklahoma City, OK",
+                "include_geometry": "FALSE",
+            },
+        )
+
+        self.assertIsInstance(default_response.json()["duration_hours"], (int, float))
+        self.assertIn("route_geojson", default_response.json())
+        self.assertNotIn("route_geojson", without_geometry.json())
+
+    @patch("routing.views.optimize_fuel_stops")
+    @patch("routing.views.find_stations_along_route")
+    @patch("routing.views.get_route")
+    def test_cached_response_is_marked_and_computed_once(
+        self,
+        get_route_mock,
+        find_stations_mock,
+        optimize_mock,
+    ):
+        get_route_mock.return_value = self.fake_route()
+        find_stations_mock.return_value = self.fake_stations()
+        optimize_mock.return_value = self.fake_optimized()
+
+        first = self.client.get(
+            "/api/route/",
+            {"start": "Dallas, TX", "finish": "Oklahoma City, OK"},
+        )
+        second = self.client.get(
+            "/api/route/",
+            {"start": "Dallas, TX", "finish": "Oklahoma City, OK"},
+        )
+
+        self.assertFalse(first.json()["cached"])
+        self.assertTrue(second.json()["cached"])
+        self.assertEqual(get_route_mock.call_count, 1)
+        self.assertEqual(find_stations_mock.call_count, 1)
+        self.assertEqual(optimize_mock.call_count, 1)
 
     def test_missing_finish_returns_bad_request(self):
         response = self.client.get("/api/route/", {"start": "Dallas, TX"})
