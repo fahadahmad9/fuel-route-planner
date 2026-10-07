@@ -1,5 +1,6 @@
 from django.test import TestCase
 from django.test import SimpleTestCase, override_settings
+from rest_framework.test import APITestCase
 
 import numpy as np
 import requests
@@ -464,3 +465,130 @@ class FuelOptimizerTests(SimpleTestCase):
                 optimum,
                 delta=1.00,
             )
+
+
+class RouteAPITests(APITestCase):
+    def fake_stations(self):
+        return {
+            "total_miles": 600.0,
+            "stations": [
+                {
+                    "opis_id": 1,
+                    "name": "First Station",
+                    "address": "1 Main St",
+                    "city": "Dallas",
+                    "state": "TX",
+                    "lat": 32.78,
+                    "lng": -96.8,
+                    "price": 3.0,
+                    "mile_marker": 300.0,
+                    "off_route_miles": 0.0,
+                },
+                {
+                    "opis_id": 2,
+                    "name": "Second Station",
+                    "address": "2 Main St",
+                    "city": "Oklahoma City",
+                    "state": "OK",
+                    "lat": 35.47,
+                    "lng": -97.5,
+                    "price": 3.2,
+                    "mile_marker": 500.0,
+                    "off_route_miles": 0.0,
+                },
+            ],
+        }
+
+    def fake_optimized(self):
+        return {
+            "total_miles": 600.0,
+            "total_gallons": 60.0,
+            "gallons_purchased": 10.0,
+            "total_cost": 30.0,
+            "stops": [
+                {
+                    **self.fake_stations()["stations"][0],
+                    "gallons_purchased": 10.0,
+                    "cost": 30.0,
+                },
+            ],
+        }
+
+    @patch("routing.views.optimize_fuel_stops")
+    @patch("routing.views.find_stations_along_route")
+    @patch("routing.views.get_route")
+    def test_route_endpoint_returns_formatted_route(
+        self,
+        get_route_mock,
+        find_stations_mock,
+        optimize_mock,
+    ):
+        get_route_mock.return_value = {
+            "coords": [
+                (32.78, -96.8),
+                (35.47, -97.5),
+            ],
+            "distance_miles": 600.0,
+            "duration_hours": 10.0,
+            "geometry": {"type": "LineString", "coordinates": []},
+        }
+        find_stations_mock.return_value = self.fake_stations()
+        optimize_mock.return_value = self.fake_optimized()
+
+        response = self.client.post(
+            "/api/route/",
+            {
+                "start": "Dallas, TX",
+                "finish": "Oklahoma City, OK",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        for key in (
+            "start",
+            "finish",
+            "distance_miles",
+            "total_gallons",
+            "total_fuel_cost",
+            "assumptions",
+            "fuel_stops",
+            "route_geojson",
+            "map_url",
+        ):
+            self.assertIn(key, body)
+        self.assertEqual(
+            [stop["mile_marker"] for stop in body["fuel_stops"]],
+            sorted(stop["mile_marker"] for stop in body["fuel_stops"]),
+        )
+        self.assertEqual(
+            body["total_fuel_cost"],
+            round(sum(stop["cost"] for stop in body["fuel_stops"]), 2),
+        )
+        get_route_mock.assert_called_once()
+
+    def test_missing_finish_returns_bad_request(self):
+        response = self.client.get("/api/route/", {"start": "Dallas, TX"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+
+    def test_non_us_location_returns_bad_request(self):
+        response = self.client.get(
+            "/api/route/",
+            {"start": "Dallas, TX", "finish": "Toronto, ON"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+
+    @patch("routing.views.get_route")
+    def test_ors_failure_returns_bad_gateway(self, get_route_mock):
+        get_route_mock.side_effect = RoutingError("No drivable route was found.")
+        response = self.client.get(
+            "/api/route/",
+            {"start": "Dallas, TX", "finish": "Oklahoma City, OK"},
+        )
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json(), {
+            "error": "No drivable route was found.",
+        })
