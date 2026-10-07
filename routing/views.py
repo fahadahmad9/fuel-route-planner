@@ -1,5 +1,6 @@
 from urllib.parse import urlencode
 
+from django.shortcuts import render
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -8,6 +9,10 @@ from routing.services.geo import GeoError, resolve_location
 from routing.services.optimizer import OptimizerError, optimize_fuel_stops
 from routing.services.ors import RoutingError, get_route
 from routing.services.route import find_stations_along_route
+
+
+def route_map(request):
+    return render(request, "routing/map.html")
 
 
 class RouteView(APIView):

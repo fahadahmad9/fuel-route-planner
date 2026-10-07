@@ -468,6 +468,11 @@ class FuelOptimizerTests(SimpleTestCase):
 
 
 class RouteAPITests(APITestCase):
+    def test_route_map_renders_template(self):
+        response = self.client.get("/api/route/map/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "routing/map.html")
+
     def fake_stations(self):
         return {
             "total_miles": 600.0,

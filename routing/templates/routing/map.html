@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fuel Route Map</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #f4f6f8; color: #1f2933; }
+    main { max-width: 1200px; margin: 0 auto; padding: 1rem; }
+    form, #summary { background: white; border: 1px solid #d9e2ec; border-radius: 8px; padding: 1rem; }
+    form { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
+    label { display: flex; flex: 1 1 240px; flex-direction: column; gap: .25rem; font-weight: 600; }
+    input, button { box-sizing: border-box; font: inherit; padding: .55rem; border: 1px solid #9fb3c8; border-radius: 4px; }
+    button { cursor: pointer; background: #1769aa; color: white; border-color: #1769aa; }
+    #message { min-height: 1.5rem; margin: .75rem 0; }
+    .error { color: #a61b1b; font-weight: 600; }
+    #map { height: 60vh; min-height: 360px; margin: 1rem 0; border-radius: 8px; }
+    #summary { overflow-x: auto; }
+    .metrics { display: flex; flex-wrap: wrap; gap: 1.25rem; margin-bottom: 1rem; }
+    .metric strong { display: block; font-size: 1.2rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .5rem; text-align: left; border-bottom: 1px solid #d9e2ec; white-space: nowrap; }
+    @media (max-width: 600px) { main { padding: .5rem; } #map { height: 55vh; } }
+  </style>
+</head>
+<body>
+<main>
+  <form id="route-form">
+    <label>Start <input id="start" name="start" maxlength="100" required></label>
+    <label>Finish <input id="finish" name="finish" maxlength="100" required></label>
+    <button type="submit">Go</button>
+  </form>
+  <div id="message" role="status">Loading route...</div>
+  <div id="map" aria-label="Route map"></div>
+  <section id="summary" hidden>
+    <div class="metrics">
+      <div class="metric">Distance<strong id="distance"></strong></div>
+      <div class="metric">Fuel<strong id="gallons"></strong></div>
+      <div class="metric">Cost<strong id="cost"></strong></div>
+      <div class="metric">Stops<strong id="stop-count"></strong></div>
+    </div>
+    <table>
+      <thead><tr><th>#</th><th>Name</th><th>Location</th><th>Price</th><th>Mile</th><th>Gallons</th><th>Cost</th></tr></thead>
+      <tbody id="stops"></tbody>
+    </table>
+  </section>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+(() => {
+  const params = new URLSearchParams(window.location.search);
+  const start = params.get("start") || "";
+  const finish = params.get("finish") || "";
+  document.getElementById("start").value = start;
+  document.getElementById("finish").value = finish;
+  document.getElementById("route-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const next = new URLSearchParams({
+      start: document.getElementById("start").value.trim(),
+      finish: document.getElementById("finish").value.trim()
+    });
+    window.location.search = next.toString();
+  });
+
+  const message = document.getElementById("message");
+  const map = L.map("map").setView([39, -98], 4);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors",
+    maxZoom: 19
+  }).addTo(map);
+
+  function markerIcon(color, label) {
+    return L.divIcon({
+      className: "",
+      html: `<div style="background:${color};color:white;border-radius:50%;width:26px;height:26px;line-height:26px;text-align:center;font-weight:700;border:2px solid white">${label}</div>`,
+      iconSize: [30, 30],
+      iconAnchor: [15, 15]
+    });
+  }
+
+  function addText(parent, text) {
+    const span = document.createElement("span");
+    span.textContent = text;
+    parent.appendChild(span);
+    return span;
+  }
+
+  async function loadRoute() {
+    if (!start || !finish) {
+      message.textContent = "Enter a start and finish location.";
+      message.className = "error";
+      return;
+    }
+    const query = new URLSearchParams({ start, finish });
+    try {
+      const response = await fetch("/api/route/?" + query.toString());
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to load route.");
+      message.textContent = "Route loaded.";
+      const coordinates = data.route_geojson.coordinates.map((point) => [point[1], point[0]]);
+      L.polyline(coordinates, { color: "#1769aa", weight: 5 }).addTo(map);
+      map.fitBounds(coordinates);
+      L.marker([data.start.lat, data.start.lng], { icon: markerIcon("#238636", "S") })
+        .addTo(map).bindPopup(data.start.label);
+      L.marker([data.finish.lat, data.finish.lng], { icon: markerIcon("#cf222e", "F") })
+        .addTo(map).bindPopup(data.finish.label);
+      data.fuel_stops.forEach((stop, index) => {
+        const popup = document.createElement("div");
+        addText(popup, stop.name);
+        popup.appendChild(document.createElement("br"));
+        addText(popup, `${stop.city}, ${stop.state}`);
+        popup.appendChild(document.createElement("br"));
+        addText(popup, `Price: $${Number(stop.price).toFixed(3)}/gal`);
+        popup.appendChild(document.createElement("br"));
+        addText(popup, `Mile: ${Number(stop.mile_marker).toFixed(1)}`);
+        popup.appendChild(document.createElement("br"));
+        addText(popup, `Gallons: ${Number(stop.gallons).toFixed(2)}`);
+        popup.appendChild(document.createElement("br"));
+        addText(popup, `Cost: $${Number(stop.cost).toFixed(2)}`);
+        L.marker([stop.lat, stop.lng], { icon: markerIcon("#8250df", String(index + 1)) })
+          .addTo(map).bindPopup(popup);
+      });
+      document.getElementById("distance").textContent = `${data.distance_miles.toFixed(1)} miles`;
+      document.getElementById("gallons").textContent = `${data.total_gallons.toFixed(2)} gallons`;
+      document.getElementById("cost").textContent = `$${data.total_fuel_cost.toFixed(2)}`;
+      document.getElementById("stop-count").textContent = String(data.fuel_stops.length);
+      const tbody = document.getElementById("stops");
+      data.fuel_stops.forEach((stop, index) => {
+        const row = document.createElement("tr");
+        [index + 1, stop.name, `${stop.city}, ${stop.state}`,
+          `$${Number(stop.price).toFixed(3)}`, Number(stop.mile_marker).toFixed(1),
+          Number(stop.gallons).toFixed(2), `$${Number(stop.cost).toFixed(2)}`
+        ].forEach((value) => { const cell = document.createElement("td"); cell.textContent = value; row.appendChild(cell); });
+        tbody.appendChild(row);
+      });
+      document.getElementById("summary").hidden = false;
+    } catch (error) {
+      message.textContent = error.message;
+      message.className = "error";
+    }
+  }
+  loadRoute();
+})();
+</script>
+</body>
+</html>
